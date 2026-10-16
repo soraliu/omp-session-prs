@@ -31,6 +31,19 @@ function hyperlink(text: string, url: string): string {
 	return `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
 }
 
+/** Like `getCapabilities().hyperlinks`, but also recognises Herdr: it renders
+ * OSC 8 in its own grid (opens links on Ctrl+click) while hiding the outer
+ * terminal from TERM/TERM_PROGRAM, so the upstream static probe reports
+ * "unknown terminal" and conservatively returns false inside a Herdr pane. */
+function hyperlinksEnabled(): boolean {
+	if (getCapabilities().hyperlinks) return true;
+	const env = process.env;
+	return (
+		env.HERDR_ENV === "1" ||
+		Boolean(env.HERDR_PANE_ID || env.HERDR_TAB_ID || env.HERDR_WORKSPACE_ID)
+	);
+}
+
 const GH_TIMEOUT_MS = 15_000;
 const STATE_TTL_MS = 60_000;
 
@@ -51,11 +64,11 @@ export default function (pi: ExtensionAPI) {
 
 	/** One PR line above the composer (in omp's band layout it docks directly
 	 * below the session-title row), grouped by state (● open, ✔ merged, ✕
-	 * closed). Rendered via a Text widget so ANSI survives: omp's status band
+	 * closure). Rendered via a Text widget so ANSI survives: omp's status band
 	 * sanitises escape sequences, which would strip OSC 8 links. Terminals
-	 * without hyperlink support (getCapabilities) degrade to plain #N. */
+	 * without hyperlink support degrade to plain #N. */
 	const render = (ctx: ExtensionContext) => {
-		const hyperlinks = getCapabilities().hyperlinks;
+		const hyperlinks = hyperlinksEnabled();
 		const text = format(
 			prs,
 			(t, url) => (hyperlinks ? hyperlink(t, url) : t),
