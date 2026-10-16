@@ -11,6 +11,7 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { getCapabilities } from "@earendil-works/pi-tui";
 
 import {
 	candidates,
@@ -48,11 +49,25 @@ export default function (pi: ExtensionAPI) {
 	const rejected = new Set<string>();
 	let statesCheckedAt = 0;
 
+	/** One PR line above the composer (in omp's band layout it docks directly
+	 * below the session-title row), grouped by state (● open, ✔ merged, ✕
+	 * closed). Rendered via a Text widget so ANSI survives: omp's status band
+	 * sanitises escape sequences, which would strip OSC 8 links. Terminals
+	 * without hyperlink support (getCapabilities) degrade to plain #N. */
 	const render = (ctx: ExtensionContext) => {
-		const text = format(prs, hyperlink, (color, t) =>
-			ctx.ui.theme.fg(color, t),
+		const hyperlinks = getCapabilities().hyperlinks;
+		const text = format(
+			prs,
+			(t, url) => (hyperlinks ? hyperlink(t, url) : t),
+			(color, t) => ctx.ui.theme.fg(color, t),
 		);
-		ctx.ui.setStatus("pr", text);
+		ctx.ui.setWidget(
+			"pi-session-prs",
+			text === undefined ? undefined : [text],
+			{
+				placement: "aboveEditor",
+			},
+		);
 	};
 
 	/** Never throws: a flaky gh call must not take the pi process (and its tmux pane) down. */
