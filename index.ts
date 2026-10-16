@@ -11,7 +11,6 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { hyperlink } from "@earendil-works/pi-tui";
 
 import {
 	candidates,
@@ -24,6 +23,12 @@ import {
 	type State,
 	sorted,
 } from "./core.ts";
+
+// NOTE: local OSC 8 helper, semantically identical to upstream `@earendil-works/pi-tui`'s
+// `hyperlink`; kept local because omp's pi-compat shim does not re-export it.
+function hyperlink(text: string, url: string): string {
+	return `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
+}
 
 const GH_TIMEOUT_MS = 15_000;
 const STATE_TTL_MS = 60_000;
@@ -144,7 +149,9 @@ export default function (pi: ExtensionAPI) {
 		if (text && (await add(ctx, candidates(text)))) render(ctx);
 	});
 
-	pi.on("agent_settled", async (_e, ctx) => {
+	// omp's extension runtime names this event `agent_end`; upstream pi 0.84 also
+	// emits it, so the substitution is compatible with both hosts.
+	pi.on("agent_end", async (_e, ctx) => {
 		const found = await add(ctx, await branchUrls(ctx));
 		if ((await refreshStates(ctx)) || found) render(ctx);
 	});
@@ -157,7 +164,7 @@ export default function (pi: ExtensionAPI) {
 		ctx: ExtensionContext,
 		title: string,
 	): Promise<[string, Pr] | undefined> => {
-		/** No forced refresh: agent_settled already polls, and a blocking `gh pr view`
+		/** No forced refresh: agent_end already polls, and a blocking `gh pr view`
 		 * per tracked PR delayed the picker by seconds. */
 		if (await refreshStates(ctx)) render(ctx);
 		const all = sorted(prs);
@@ -173,9 +180,32 @@ export default function (pi: ExtensionAPI) {
 		return picked ? all[labels.indexOf(picked)] : undefined;
 	};
 
+	/** `/prs list`: print the tracked PRs as a markdown list. TUIs render each
+	 * row as a clickable OSC 8 hyperlink, so the list stays clickable inside
+	 * terminal multiplexers such as herdr/tmux. */
+	const listPrs = async (ctx: ExtensionContext) => {
+		if (await refreshStates(ctx)) render(ctx);
+		const all = sorted(prs);
+		if (all.length === 0) {
+			ctx.ui.notify("No PRs in this session", "info");
+			return;
+		}
+		const lines = all.map(
+			([url, pr]) =>
+				`- ${STYLE[pr.state].icon} [#${pr.number} ${pr.title}](${url})`,
+		);
+		pi.sendMessage({
+			customType: "pi-session-prs.list",
+			content: `Pull requests in this session:\n${lines.join("\n")}`,
+			display: true,
+		});
+	};
+
 	pi.registerCommand("prs", {
-		description: "Open a PR from this session in the browser",
-		handler: async (_args, ctx) => {
+		description:
+			"Open a PR from this session in the browser; `list` prints clickable links",
+		handler: async (args, ctx) => {
+			if (args.trim() === "list") return listPrs(ctx);
 			const entry = await pickPr(ctx, "Open PR");
 			if (entry) await open(entry[0]);
 		},
