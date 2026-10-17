@@ -20,10 +20,10 @@ import {
 	type Pr,
 	type Prs,
 	STATE_ENTRY,
-	stateSnapshot,
 	STYLE,
 	type State,
 	sorted,
+	stateSnapshot,
 } from "./core.ts";
 
 // NOTE: local OSC 8 helper, semantically identical to upstream `@earendil-works/pi-tui`'s
@@ -58,7 +58,7 @@ const STATE_TTL_MS = 60_000;
 function transcriptOf(ctx: ExtensionContext): string {
 	const entries: unknown[] = ctx.sessionManager.getEntries();
 	if (entries.length === 0) return "";
-	return entries.map(entry => JSON.stringify(entry)).join("\n");
+	return entries.map((entry) => JSON.stringify(entry)).join("\n");
 }
 
 export default function (pi: ExtensionAPI) {
@@ -97,7 +97,7 @@ export default function (pi: ExtensionAPI) {
 			"omp-session-prs",
 			text === undefined ? undefined : [text],
 			{
-			placement: "belowEditor",
+				placement: "belowEditor",
 			},
 		);
 	};
@@ -130,11 +130,11 @@ export default function (pi: ExtensionAPI) {
 		// `gh pr view` calls (each with a 15s failure ceiling) delayed the first
 		// render behind minutes of dead air; Promise.all keeps result order.
 		const batch = [...new Set(urls)].filter(
-			url => !prs.has(url) && !rejected.has(url),
+			(url) => !prs.has(url) && !rejected.has(url),
 		);
 		if (batch.length === 0) return false;
 		const found = await Promise.all(
-			batch.map(url => lookup(ctx, url).then(pr => [url, pr] as const)),
+			batch.map((url) => lookup(ctx, url).then((pr) => [url, pr] as const)),
 		);
 		let changed = false;
 		for (const [url, pr] of found) {
@@ -187,7 +187,11 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	pi.on("session_start", async (_e, ctx) => {
+	/** session_start body, shared with omp's session_switch event: interactive
+	 * picker / continue resumes load the target session only AFTER session_start
+	 * fired on the still-empty draft journal, so the restore must run again when
+	 * the switch completes. */
+	const bootstrap = async (ctx: ExtensionContext) => {
 		prs.clear();
 		rejected.clear();
 		statesCheckedAt = Date.now();
@@ -209,6 +213,23 @@ export default function (pi: ExtensionAPI) {
 		]);
 		if (found) persist();
 		render(ctx);
+	};
+
+	pi.on("session_start", async (_e, ctx) => {
+		await bootstrap(ctx);
+	});
+
+	// omp-only lifecycle event. Upstream pi 0.84 lacks it, and its `on` is a
+	// permissive map registration that never throws on unknown names, so the
+	// subscription is a no-op there (upstream CLI paths bind the session file
+	// before session_start runs) — but tsc only modelling real overloads
+	// forces the call through a widened view of the same method.
+	const onSessionSwitch = pi.on as unknown as (
+		event: "session_switch",
+		handler: (event: unknown, ctx: ExtensionContext) => void,
+	) => void;
+	onSessionSwitch("session_switch", async (_e, ctx) => {
+		await bootstrap(ctx);
 	});
 
 	pi.on("tool_execution_end", async (event, ctx) => {

@@ -118,54 +118,69 @@ export function stateSnapshot(text: string): [string, Pr][] {
 		) {
 			continue;
 		}
-		let entry: unknown;
-		try {
-			entry = JSON.parse(lines[i]);
-		} catch {
-			continue; // malformed line: try the next-older snapshot
-		}
-		if (
-			typeof entry !== "object" ||
-			entry === null ||
-			!("type" in entry) ||
-			!("customType" in entry) ||
-			!("data" in entry) ||
-			entry.type !== "custom" ||
-			(entry.customType !== STATE_ENTRY &&
-				entry.customType !== LEGACY_STATE_ENTRY) ||
-			!Array.isArray(entry.data)
-		) {
-			continue;
-		}
-		// Snapshot shape: [url, pr][]. Any bad member invalidates the whole
-		// entry (a torn write), so fall through to the next-older snapshot.
-		const prs: [string, Pr][] = [];
-		let valid = true;
-		for (const item of entry.data) {
-			const pr = Array.isArray(item) && item.length === 2 ? item[1] : undefined;
-			if (
-				typeof pr === "object" &&
-				pr !== null &&
-				"number" in pr &&
-				typeof pr.number === "number" &&
-				"title" in pr &&
-				typeof pr.title === "string" &&
-				"state" in pr &&
-				typeof pr.state === "string" &&
-				pr.state in STYLE
-			) {
-				prs.push([
-					String(item[0]),
-					{ number: pr.number, title: pr.title, state: pr.state },
-				]);
-				continue;
-			}
-			valid = false;
-			break;
-		}
-		if (valid) return prs;
+		const snapshot = parseSnapshotLine(lines[i]);
+		if (snapshot !== undefined) return snapshot;
 	}
 	return [];
+}
+
+/** `undefined` = not a snapshot line (or one whose write was torn — a bad
+ * member invalidates the whole entry), so the caller falls through to the
+ * next-older snapshot instead of half-restoring. */
+function parseSnapshotLine(line: string): [string, Pr][] | undefined {
+	let entry: unknown;
+	try {
+		entry = JSON.parse(line);
+	} catch {
+		return undefined;
+	}
+	if (
+		typeof entry !== "object" ||
+		entry === null ||
+		!("type" in entry) ||
+		!("customType" in entry) ||
+		!("data" in entry) ||
+		entry.type !== "custom" ||
+		(entry.customType !== STATE_ENTRY &&
+			entry.customType !== LEGACY_STATE_ENTRY) ||
+		!Array.isArray(entry.data)
+	) {
+		return undefined;
+	}
+	return validPairs(entry.data);
+}
+
+/** Snapshot shape: [url, pr][]. */
+function validPairs(data: unknown[]): [string, Pr][] | undefined {
+	const prs: [string, Pr][] = [];
+	for (const item of data) {
+		if (
+			!Array.isArray(item) ||
+			item.length !== 2 ||
+			typeof item[0] !== "string"
+		) {
+			return undefined;
+		}
+		const pr = item[1];
+		if (
+			typeof pr !== "object" ||
+			pr === null ||
+			!("number" in pr) ||
+			typeof pr.number !== "number" ||
+			!("title" in pr) ||
+			typeof pr.title !== "string" ||
+			!("state" in pr) ||
+			typeof pr.state !== "string" ||
+			!(pr.state in STYLE)
+		) {
+			return undefined;
+		}
+		prs.push([
+			item[0],
+			{ number: pr.number, title: pr.title, state: pr.state },
+		]);
+	}
+	return prs;
 }
 
 export function sorted(prs: Prs): [string, Pr][] {
