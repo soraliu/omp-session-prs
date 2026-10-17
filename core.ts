@@ -100,54 +100,68 @@ export const STATE_ENTRY = "omp-session-prs.state";
  * only STATE_ENTRY. */
 const LEGACY_STATE_ENTRY = "pi-session-prs.state";
 
-/** Newest tracked-PR snapshot in a session transcript, so a resumed process
- * rebuilds the footer without `gh`. Snapshots are cumulative (the whole Map
- * each time), so the newest valid one wins. Unlike the fresh-session paths —
- * transcript URLs need `gh pr view`, the branch needs `gh pr list` — a
+/** Newest tracked-PR snapshot among the session's loaded entries, so a resumed
+ * process rebuilds the footer without `gh`. Snapshots are cumulative (the
+ * whole Map each time), so the newest valid one wins. Unlike the fresh-session
+ * paths — transcript URLs need `gh pr view`, the branch needs `gh pr list` — a
  * snapshot also survives worktree/branch deletion.
  *
- * Performance: long transcripts are thousands of JSONL lines; a per-line
- * `JSON.parse` would dominate. The `includes` prescreen leaves only the
- * snapshot lines, parsed newest-first, stopping at the first valid one. */
-export function stateSnapshot(text: string): [string, Pr][] {
-	const lines = text.split("\n");
-	for (let i = lines.length - 1; i >= 0; i--) {
+ * Reads the structured entries directly (customType/data member access):
+ * re-serialising a multi-megabyte journal to JSONL text just to parse it back
+ * blocked the TUI on large sessions, and the entry objects are already
+ * resident — this is an O(n) member walk with no string allocation. */
+export function snapshotFromEntries(entries: unknown[]): [string, Pr][] {
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i];
 		if (
-			!lines[i].includes(STATE_ENTRY) &&
-			!lines[i].includes(LEGACY_STATE_ENTRY)
+			typeof entry !== "object" ||
+			entry === null ||
+			!("customType" in entry) ||
+			(entry.customType !== STATE_ENTRY &&
+				entry.customType !== LEGACY_STATE_ENTRY)
 		) {
 			continue;
 		}
-		const snapshot = parseSnapshotLine(lines[i]);
+		// A torn write leaves a member-invalid data array: fall through to the
+		// next-older snapshot instead of half-restoring.
+		if (!("data" in entry) || !Array.isArray(entry.data)) continue;
+		const snapshot = validPairs(entry.data);
 		if (snapshot !== undefined) return snapshot;
 	}
 	return [];
 }
 
-/** `undefined` = not a snapshot line (or one whose write was torn — a bad
- * member invalidates the whole entry), so the caller falls through to the
- * next-older snapshot instead of half-restoring. */
-function parseSnapshotLine(line: string): [string, Pr][] | undefined {
-	let entry: unknown;
-	try {
-		entry = JSON.parse(line);
-	} catch {
-		return undefined;
+/** Pull-request urls mentioned by the session's messages (agent output, tool
+ * results, user text). Structural read of the message entries' content
+ * blocks — the same zero-serialisation reasoning as snapshotFromEntries. */
+export function urlsFromEntries(entries: unknown[]): string[] {
+	const urls: string[] = [];
+	for (const entry of entries) {
+		if (typeof entry !== "object" || entry === null || !("message" in entry)) {
+			continue;
+		}
+		const message = entry.message;
+		if (
+			typeof message !== "object" ||
+			message === null ||
+			!("content" in message) ||
+			!Array.isArray(message.content)
+		) {
+			continue;
+		}
+		for (const block of message.content) {
+			if (
+				typeof block === "object" &&
+				block !== null &&
+				"text" in block &&
+				typeof block.text === "string"
+			) {
+				const found = block.text.match(PR_URL);
+				if (found) urls.push(...found);
+			}
+		}
 	}
-	if (
-		typeof entry !== "object" ||
-		entry === null ||
-		!("type" in entry) ||
-		!("customType" in entry) ||
-		!("data" in entry) ||
-		entry.type !== "custom" ||
-		(entry.customType !== STATE_ENTRY &&
-			entry.customType !== LEGACY_STATE_ENTRY) ||
-		!Array.isArray(entry.data)
-	) {
-		return undefined;
-	}
-	return validPairs(entry.data);
+	return [...new Set(urls)];
 }
 
 /** Snapshot shape: [url, pr][]. */

@@ -22,8 +22,9 @@ import {
 	STATE_ENTRY,
 	STYLE,
 	type State,
+	snapshotFromEntries,
 	sorted,
-	stateSnapshot,
+	urlsFromEntries,
 } from "./core.ts";
 
 // NOTE: local OSC 8 helper, semantically identical to upstream `@earendil-works/pi-tui`'s
@@ -47,19 +48,6 @@ function hyperlinksEnabled(): boolean {
 
 const GH_TIMEOUT_MS = 15_000;
 const STATE_TTL_MS = 60_000;
-
-/** In-memory transcript text: the session's loaded entries serialised as the
- * JSONL lines they appear as on disk. Reading entries instead of the session
- * file keeps resume working on every entry path — `--resume <path>` binds the
- * file early, but id-prefix / continue / picker resumes emit `session_start`
- * while the writer is still on a fresh draft file, so a `readFileSync` of the
- * file at that moment sees nothing. A fresh session has no entries and the
- * open-elsewhere relocation chain keeps them in memory either way. */
-function transcriptOf(ctx: ExtensionContext): string {
-	const entries: unknown[] = ctx.sessionManager.getEntries();
-	if (entries.length === 0) return "";
-	return entries.map((entry) => JSON.stringify(entry)).join("\n");
-}
 
 export default function (pi: ExtensionAPI) {
 	const prs: Prs = new Map();
@@ -195,20 +183,21 @@ export default function (pi: ExtensionAPI) {
 		prs.clear();
 		rejected.clear();
 		statesCheckedAt = Date.now();
-		const transcript = transcriptOf(ctx);
-		// Resume path: the newest transcript snapshot restores the footer even
-		// when the branch and worktree (and with them gh) are gone. Baseline the
-		// serializer with the restored map so a no-op turn appends nothing.
-		const snapshot = stateSnapshot(transcript);
+		const entries: unknown[] = ctx.sessionManager.getEntries();
+		// Stage one — restore the persisted snapshot: a structured O(n) walk of
+		// the resident entries (no journal re-serialisation, no JSON.parse), so
+		// even a multi-megabyte session paints its footer within the event-loop
+		// turn the switch fired in.
+		const snapshot = snapshotFromEntries(entries);
 		for (const [url, pr] of snapshot) prs.set(url, pr);
 		lastSnapshot = JSON.stringify(snapshot);
-		// Paint the restored footer immediately: the gh lookups below can take
-		// tens of seconds (parallel, but each individual call has a 15s failure
-		// ceiling), and a resumed session should never wait for them to show
-		// the already-known PRs.
 		render(ctx);
+		// Stage two — discovery. Yield first so the TUI paints the restored
+		// frame and takes input, then suspend this turn on the parallel gh
+		// lookups (each with a 15s failure ceiling) instead of blocking the loop.
+		await new Promise(setImmediate);
 		const found = await add(ctx, [
-			...candidates(transcript),
+			...urlsFromEntries(entries),
 			...(await branchUrls(ctx)),
 		]);
 		if (found) persist();

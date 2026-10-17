@@ -9,7 +9,8 @@ import {
 	type Prs,
 	STATE_ENTRY,
 	type State,
-	stateSnapshot,
+	snapshotFromEntries,
+	urlsFromEntries,
 } from "./core.ts";
 
 const url = (n: number) =>
@@ -119,50 +120,71 @@ test("paint wraps each state group, never the whole line", () => {
 	);
 });
 
-test("stateSnapshot restores the newest snapshot and skips junk", () => {
-	const entry = (data: unknown) =>
-		JSON.stringify({ type: "custom", customType: STATE_ENTRY, data });
-	const transcript = [
-		JSON.stringify({ type: "session", version: 3, id: "x" }),
-		entry([...make([[604, "CLOSED"]])]), // older snapshot
-		JSON.stringify({ type: "message" }),
-		entry([
+test("snapshotFromEntries restores the newest snapshot and skips junk", () => {
+	const snapshotEntry = (data: unknown, key = STATE_ENTRY) => ({
+		type: "custom",
+		customType: key,
+		data,
+	});
+	const entries: unknown[] = [
+		{ type: "session", version: 3, id: "x" },
+		snapshotEntry([...make([[604, "CLOSED"]])]), // older snapshot
+		{ type: "message" },
+		snapshotEntry([
 			...make([
 				[612, "OPEN"],
 				[598, "MERGED"],
 			]),
 		]),
-		entry("torn write"), // non-array data: fall through to the older snapshot
-	].join("\n");
-	assert.deepEqual(stateSnapshot(transcript), [
+		snapshotEntry("torn write"), // non-array data: fall to the older snapshot
+	];
+	assert.deepEqual(snapshotFromEntries(entries), [
 		[url(612), { number: 612, title: "pr 612", state: "OPEN" }],
 		[url(598), { number: 598, title: "pr 598", state: "MERGED" }],
 	]);
-	// No snapshot, malformed JSON, or a member with a bad shape: start empty /
-	// fall through to the next-older snapshot instead of half-restoring.
-	assert.deepEqual(stateSnapshot(""), []);
-	assert.deepEqual(stateSnapshot("{not json"), []);
+	// No snapshot, or a member with a bad shape: start empty / fall through to
+	// the next-older snapshot instead of half-restoring.
+	assert.deepEqual(snapshotFromEntries([]), []);
 	assert.deepEqual(
-		stateSnapshot(entry([["url", { number: 1, title: "t", state: "DRAFT" }]])),
+		snapshotFromEntries([
+			snapshotEntry([["url", { number: 1, title: "t", state: "DRAFT" }]]),
+		]),
 		[],
 	);
-	assert.deepEqual(stateSnapshot(entry([])), []);
+	assert.deepEqual(snapshotFromEntries([snapshotEntry([])]), []);
 	// Sessions recorded before the package rename keep snapshots under the
 	// legacy key; reads recognise them and the newest wins across both keys.
-	const legacy = (data: unknown) =>
-		JSON.stringify({
-			type: "custom",
-			customType: "pi-session-prs.state",
-			data,
-		});
-	assert.deepEqual(stateSnapshot(legacy([...make([[598, "MERGED"]])])), [
-		[url(598), { number: 598, title: "pr 598", state: "MERGED" }],
-	]);
-	const mixed = [
-		legacy([...make([[604, "OPEN"]])]),
-		entry([...make([[612, "CLOSED"]])]),
-	].join("\n");
-	assert.deepEqual(stateSnapshot(mixed), [
-		[url(612), { number: 612, title: "pr 612", state: "CLOSED" }],
-	]);
+	const legacyKey = "pi-session-prs.state";
+	assert.deepEqual(
+		snapshotFromEntries([
+			snapshotEntry([...make([[598, "MERGED"]])], legacyKey),
+		]),
+		[[url(598), { number: 598, title: "pr 598", state: "MERGED" }]],
+	);
+	assert.deepEqual(
+		snapshotFromEntries([
+			snapshotEntry([...make([[604, "OPEN"]])], legacyKey),
+			snapshotEntry([...make([[612, "CLOSED"]])]),
+		]),
+		[[url(612), { number: 612, title: "pr 612", state: "CLOSED" }]],
+	);
+});
+
+test("urlsFromEntries collects pull urls from message text blocks", () => {
+	const message = (...blocks: unknown[]) => ({
+		type: "message",
+		message: { role: "assistant", content: blocks },
+	});
+	const entries: unknown[] = [
+		{ type: "session", version: 3 },
+		message({ type: "text", text: `opened ${url(604)} and ${url(604)} again` }),
+		{ type: "custom", customType: "unrelated", data: url(700) },
+		message({ type: "image", data: "…" }),
+		message(
+			{ type: "text", text: "no urls here" },
+			{ type: "text", text: `then ${url(612)}` },
+		),
+	];
+	assert.deepEqual(urlsFromEntries(entries), [url(604), url(612)]);
+	assert.deepEqual(urlsFromEntries([]), []);
 });
