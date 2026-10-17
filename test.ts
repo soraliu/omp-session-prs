@@ -8,6 +8,7 @@ import {
 	format,
 	type Prs,
 	type State,
+	STATE_ENTRY,
 	stateSnapshot,
 } from "./core.ts";
 
@@ -120,7 +121,7 @@ test("paint wraps each state group, never the whole line", () => {
 
 test("stateSnapshot restores the newest snapshot and skips junk", () => {
 	const entry = (data: unknown) =>
-		JSON.stringify({ type: "custom", customType: "pi-session-prs.state", data });
+		JSON.stringify({ type: "custom", customType: STATE_ENTRY, data });
 	const transcript = [
 		JSON.stringify({ type: "session", version: 3, id: "x" }),
 		entry([...make([[604, "CLOSED"]])]), // older snapshot
@@ -141,4 +142,20 @@ test("stateSnapshot restores the newest snapshot and skips junk", () => {
 		[],
 	);
 	assert.deepEqual(stateSnapshot(entry([])), []);
+	// Sessions recorded before the package rename keep snapshots under the
+	// legacy key; reads recognise them and the newest wins across both keys.
+	const legacy = (data: unknown) =>
+		JSON.stringify({ type: "custom", customType: "pi-session-prs.state", data });
+	assert.deepEqual(
+		stateSnapshot(legacy([...make([[598, "MERGED"]])])),
+		[[url(598), { number: 598, title: "pr 598", state: "MERGED" }]],
+	);
+	const mixed = [
+		legacy([...make([[604, "OPEN"]])]),
+		entry([...make([[612, "CLOSED"]])]),
+	].join("\n");
+	assert.deepEqual(
+		stateSnapshot(mixed),
+		[[url(612), { number: 612, title: "pr 612", state: "CLOSED" }]],
+	);
 });

@@ -1,4 +1,4 @@
-# pi-session-prs
+# omp-session-prs
 
 The extension only runs inside pi. Unit tests cover `core.ts` and prove nothing
 about `index.ts` wiring, so test a change to `index.ts` in a live pi session

@@ -92,7 +92,7 @@ export default function (pi: ExtensionAPI) {
 			(color, t) => ctx.ui.theme.fg(color, t),
 		);
 		ctx.ui.setWidget(
-			"pi-session-prs",
+			"omp-session-prs",
 			text === undefined ? undefined : [text],
 			{
 			placement: "belowEditor",
@@ -256,7 +256,7 @@ export default function (pi: ExtensionAPI) {
 				`- ${STYLE[pr.state].icon} [#${pr.number} ${pr.title}](${url})`,
 		);
 		pi.sendMessage({
-			customType: "pi-session-prs.list",
+			customType: "omp-session-prs.list",
 			content: `Pull requests in this session:\n${lines.join("\n")}`,
 			display: true,
 		});

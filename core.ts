@@ -93,7 +93,12 @@ export function candidates(text: string): string[] {
 
 /** Persisted-snapshot entry (session JSONL `custom` line written through
  * `pi.appendEntry`); the constant doubles as the fast-scan prescreen needle. */
-export const STATE_ENTRY = "pi-session-prs.state";
+export const STATE_ENTRY = "omp-session-prs.state";
+
+/** The package's earlier name; sessions recorded before the rename keep
+ * snapshot entries under this key, so reads recognise both while writes use
+ * only STATE_ENTRY. */
+const LEGACY_STATE_ENTRY = "pi-session-prs.state";
 
 /** Newest tracked-PR snapshot in a session transcript, so a resumed process
  * rebuilds the footer without `gh`. Snapshots are cumulative (the whole Map
@@ -107,7 +112,12 @@ export const STATE_ENTRY = "pi-session-prs.state";
 export function stateSnapshot(text: string): [string, Pr][] {
 	const lines = text.split("\n");
 	for (let i = lines.length - 1; i >= 0; i--) {
-		if (!lines[i].includes(STATE_ENTRY)) continue;
+		if (
+			!lines[i].includes(STATE_ENTRY) &&
+			!lines[i].includes(LEGACY_STATE_ENTRY)
+		) {
+			continue;
+		}
 		let entry: unknown;
 		try {
 			entry = JSON.parse(lines[i]);
@@ -121,7 +131,8 @@ export function stateSnapshot(text: string): [string, Pr][] {
 			!("customType" in entry) ||
 			!("data" in entry) ||
 			entry.type !== "custom" ||
-			entry.customType !== STATE_ENTRY ||
+			(entry.customType !== STATE_ENTRY &&
+				entry.customType !== LEGACY_STATE_ENTRY) ||
 			!Array.isArray(entry.data)
 		) {
 			continue;
