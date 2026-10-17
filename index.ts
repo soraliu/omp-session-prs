@@ -6,7 +6,6 @@
  * numbers never reach the footer.
  */
 
-import { readFileSync } from "node:fs";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -49,14 +48,17 @@ function hyperlinksEnabled(): boolean {
 const GH_TIMEOUT_MS = 15_000;
 const STATE_TTL_MS = 60_000;
 
-/** A fresh session has no transcript on disk yet, so the file is routinely missing. */
-function readSession(file: string | undefined): string {
-	if (!file) return "";
-	try {
-		return readFileSync(file, "utf8");
-	} catch {
-		return "";
-	}
+/** In-memory transcript text: the session's loaded entries serialised as the
+ * JSONL lines they appear as on disk. Reading entries instead of the session
+ * file keeps resume working on every entry path — `--resume <path>` binds the
+ * file early, but id-prefix / continue / picker resumes emit `session_start`
+ * while the writer is still on a fresh draft file, so a `readFileSync` of the
+ * file at that moment sees nothing. A fresh session has no entries and the
+ * open-elsewhere relocation chain keeps them in memory either way. */
+function transcriptOf(ctx: ExtensionContext): string {
+	const entries: unknown[] = ctx.sessionManager.getEntries();
+	if (entries.length === 0) return "";
+	return entries.map(entry => JSON.stringify(entry)).join("\n");
 }
 
 export default function (pi: ExtensionAPI) {
@@ -189,7 +191,7 @@ export default function (pi: ExtensionAPI) {
 		prs.clear();
 		rejected.clear();
 		statesCheckedAt = Date.now();
-		const transcript = readSession(ctx.sessionManager.getSessionFile());
+		const transcript = transcriptOf(ctx);
 		// Resume path: the newest transcript snapshot restores the footer even
 		// when the branch and worktree (and with them gh) are gone. Baseline the
 		// serializer with the restored map so a no-op turn appends nothing.
