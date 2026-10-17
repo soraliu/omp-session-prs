@@ -62,11 +62,11 @@ export default function (pi: ExtensionAPI) {
 	const rejected = new Set<string>();
 	let statesCheckedAt = 0;
 
-	/** One PR line above the composer (in omp's band layout it docks directly
-	 * below the session-title row), grouped by state (● open, ✔ merged, ✕
-	 * closure). Rendered via a Text widget so ANSI survives: omp's status band
-	 * sanitises escape sequences, which would strip OSC 8 links. Terminals
-	 * without hyperlink support degrade to plain #N. */
+	/** One PR line below the composer band (omp docks belowEditor widgets
+	 * under the editor, no leading spacer), grouped by state (● open, ✔
+	 * merged, ✕ closure). Rendered via a Text widget so ANSI survives: omp's
+	 * status band sanitises escape sequences, which would strip OSC 8 links.
+	 * Terminals without hyperlink support degrade to plain #N. */
 	const render = (ctx: ExtensionContext) => {
 		const hyperlinks = hyperlinksEnabled();
 		const text = format(
@@ -78,7 +78,7 @@ export default function (pi: ExtensionAPI) {
 			"pi-session-prs",
 			text === undefined ? undefined : [text],
 			{
-				placement: "aboveEditor",
+			placement: "belowEditor",
 			},
 		);
 	};
