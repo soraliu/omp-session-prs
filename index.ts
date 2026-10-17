@@ -20,6 +20,8 @@ import {
 	format,
 	type Pr,
 	type Prs,
+	STATE_ENTRY,
+	stateSnapshot,
 	STYLE,
 	type State,
 	sorted,
@@ -60,7 +62,22 @@ function readSession(file: string | undefined): string {
 export default function (pi: ExtensionAPI) {
 	const prs: Prs = new Map();
 	const rejected = new Set<string>();
+	let lastSnapshot: string | undefined;
 	let statesCheckedAt = 0;
+
+	/** Append the tracked-PR snapshot to the session transcript (`appendEntry`
+	 * is pi's state-persistence channel, skipped by the LLM), so a resumed
+	 * process rebuilds the footer even when the branch/worktree — and with
+	 * them both `gh` recovery paths — are gone. Content-deduplicated: an
+	 * unchanged session appends nothing. */
+	const persist = () => {
+		if (prs.size === 0) return;
+		const snapshot: [string, Pr][] = [...prs];
+		const serialized = JSON.stringify(snapshot);
+		if (serialized === lastSnapshot) return;
+		lastSnapshot = serialized;
+		pi.appendEntry(STATE_ENTRY, snapshot);
+	};
 
 	/** One PR line below the composer band (omp docks belowEditor widgets
 	 * under the editor, no leading spacer), grouped by state (● open, ✔
@@ -164,8 +181,18 @@ export default function (pi: ExtensionAPI) {
 		prs.clear();
 		rejected.clear();
 		statesCheckedAt = Date.now();
-		const seen = candidates(readSession(ctx.sessionManager.getSessionFile()));
-		await add(ctx, [...seen, ...(await branchUrls(ctx))]);
+		const transcript = readSession(ctx.sessionManager.getSessionFile());
+		// Resume path: the newest transcript snapshot restores the footer even
+		// when the branch and worktree (and with them gh) are gone. Baseline the
+		// serializer with the restored map so a no-op turn appends nothing.
+		const snapshot = stateSnapshot(transcript);
+		for (const [url, pr] of snapshot) prs.set(url, pr);
+		lastSnapshot = JSON.stringify(snapshot);
+		const found = await add(ctx, [
+			...candidates(transcript),
+			...(await branchUrls(ctx)),
+		]);
+		if (found) persist();
 		render(ctx);
 	});
 
@@ -174,14 +201,20 @@ export default function (pi: ExtensionAPI) {
 			typeof event.result === "string"
 				? event.result
 				: JSON.stringify(event.result);
-		if (text && (await add(ctx, candidates(text)))) render(ctx);
+		if (text && (await add(ctx, candidates(text)))) {
+			persist();
+			render(ctx);
+		}
 	});
 
 	// omp's extension runtime names this event `agent_end`; upstream pi 0.84 also
 	// emits it, so the substitution is compatible with both hosts.
 	pi.on("agent_end", async (_e, ctx) => {
 		const found = await add(ctx, await branchUrls(ctx));
-		if ((await refreshStates(ctx)) || found) render(ctx);
+		if ((await refreshStates(ctx)) || found) {
+			persist();
+			render(ctx);
+		}
 	});
 
 	const open = (url: string) =>

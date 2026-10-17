@@ -8,6 +8,7 @@ import {
 	format,
 	type Prs,
 	type State,
+	stateSnapshot,
 } from "./core.ts";
 
 const url = (n: number) =>
@@ -115,4 +116,29 @@ test("paint wraps each state group, never the whole line", () => {
 		format(prs, plain, (color, t) => `<${color}>${t}</>`),
 		"PR <success>● #604</> <accent>✔ #598</> <error>✕ #590</>",
 	);
+});
+
+test("stateSnapshot restores the newest snapshot and skips junk", () => {
+	const entry = (data: unknown) =>
+		JSON.stringify({ type: "custom", customType: "pi-session-prs.state", data });
+	const transcript = [
+		JSON.stringify({ type: "session", version: 3, id: "x" }),
+		entry([...make([[604, "CLOSED"]])]), // older snapshot
+		JSON.stringify({ type: "message" }),
+		entry([...make([[612, "OPEN"], [598, "MERGED"]])]),
+		entry("torn write"), // non-array data: fall through to the older snapshot
+	].join("\n");
+	assert.deepEqual(stateSnapshot(transcript), [
+		[url(612), { number: 612, title: "pr 612", state: "OPEN" }],
+		[url(598), { number: 598, title: "pr 598", state: "MERGED" }],
+	]);
+	// No snapshot, malformed JSON, or a member with a bad shape: start empty /
+	// fall through to the next-older snapshot instead of half-restoring.
+	assert.deepEqual(stateSnapshot(""), []);
+	assert.deepEqual(stateSnapshot("{not json"), []);
+	assert.deepEqual(
+		stateSnapshot(entry([["url", { number: 1, title: "t", state: "DRAFT" }]])),
+		[],
+	);
+	assert.deepEqual(stateSnapshot(entry([])), []);
 });

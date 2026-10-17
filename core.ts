@@ -91,6 +91,72 @@ export function candidates(text: string): string[] {
 	return [...new Set(text.match(PR_URL) ?? [])];
 }
 
+/** Persisted-snapshot entry (session JSONL `custom` line written through
+ * `pi.appendEntry`); the constant doubles as the fast-scan prescreen needle. */
+export const STATE_ENTRY = "pi-session-prs.state";
+
+/** Newest tracked-PR snapshot in a session transcript, so a resumed process
+ * rebuilds the footer without `gh`. Snapshots are cumulative (the whole Map
+ * each time), so the newest valid one wins. Unlike the fresh-session paths —
+ * transcript URLs need `gh pr view`, the branch needs `gh pr list` — a
+ * snapshot also survives worktree/branch deletion.
+ *
+ * Performance: long transcripts are thousands of JSONL lines; a per-line
+ * `JSON.parse` would dominate. The `includes` prescreen leaves only the
+ * snapshot lines, parsed newest-first, stopping at the first valid one. */
+export function stateSnapshot(text: string): [string, Pr][] {
+	const lines = text.split("\n");
+	for (let i = lines.length - 1; i >= 0; i--) {
+		if (!lines[i].includes(STATE_ENTRY)) continue;
+		let entry: unknown;
+		try {
+			entry = JSON.parse(lines[i]);
+		} catch {
+			continue; // malformed line: try the next-older snapshot
+		}
+		if (
+			typeof entry !== "object" ||
+			entry === null ||
+			!("type" in entry) ||
+			!("customType" in entry) ||
+			!("data" in entry) ||
+			entry.type !== "custom" ||
+			entry.customType !== STATE_ENTRY ||
+			!Array.isArray(entry.data)
+		) {
+			continue;
+		}
+		// Snapshot shape: [url, pr][]. Any bad member invalidates the whole
+		// entry (a torn write), so fall through to the next-older snapshot.
+		const prs: [string, Pr][] = [];
+		let valid = true;
+		for (const item of entry.data) {
+			const pr = Array.isArray(item) && item.length === 2 ? item[1] : undefined;
+			if (
+				typeof pr === "object" &&
+				pr !== null &&
+				"number" in pr &&
+				typeof pr.number === "number" &&
+				"title" in pr &&
+				typeof pr.title === "string" &&
+				"state" in pr &&
+				typeof pr.state === "string" &&
+				pr.state in STYLE
+			) {
+				prs.push([
+					String(item[0]),
+					{ number: pr.number, title: pr.title, state: pr.state },
+				]);
+				continue;
+			}
+			valid = false;
+			break;
+		}
+		if (valid) return prs;
+	}
+	return [];
+}
+
 export function sorted(prs: Prs): [string, Pr][] {
 	return [...prs].sort(
 		(a, b) =>
