@@ -124,10 +124,18 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const add = async (ctx: ExtensionContext, urls: string[]) => {
+		// Parallel lookups: a long transcript mentions many PR urls, and serial
+		// `gh pr view` calls (each with a 15s failure ceiling) delayed the first
+		// render behind minutes of dead air; Promise.all keeps result order.
+		const batch = [...new Set(urls)].filter(
+			url => !prs.has(url) && !rejected.has(url),
+		);
+		if (batch.length === 0) return false;
+		const found = await Promise.all(
+			batch.map(url => lookup(ctx, url).then(pr => [url, pr] as const)),
+		);
 		let changed = false;
-		for (const url of urls) {
-			if (prs.has(url) || rejected.has(url)) continue;
-			const pr = await lookup(ctx, url);
+		for (const [url, pr] of found) {
 			if (!pr) {
 				rejected.add(url);
 				continue;
@@ -188,6 +196,11 @@ export default function (pi: ExtensionAPI) {
 		const snapshot = stateSnapshot(transcript);
 		for (const [url, pr] of snapshot) prs.set(url, pr);
 		lastSnapshot = JSON.stringify(snapshot);
+		// Paint the restored footer immediately: the gh lookups below can take
+		// tens of seconds (parallel, but each individual call has a 15s failure
+		// ceiling), and a resumed session should never wait for them to show
+		// the already-known PRs.
+		render(ctx);
 		const found = await add(ctx, [
 			...candidates(transcript),
 			...(await branchUrls(ctx)),
